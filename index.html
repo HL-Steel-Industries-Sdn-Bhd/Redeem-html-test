@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="zh-Hans">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>Reward Redemption</title>
+<style>
+  :root{ --gap:10px; --card-radius:12px; --muted:#94a3b8; --accent:#1e90ff; --bg:#071025 }
+  body{ margin:0; min-height:100vh; font-family:system-ui, -apple-system, "Noto Sans CJK SC", "Microsoft YaHei", sans-serif; background:linear-gradient(180deg,#03121d,#061827); color:#e8f4ff }
+  .topbar{ display:flex; align-items:center; justify-content:space-between; padding:12px 16px; gap:12px }
+  .left{ display:flex; align-items:center; gap:12px }
+  .icon-back{ width:44px;height:44px;border-radius:10px;background:rgba(255,255,255,0.03);display:flex;align-items:center;justify-content:center;cursor:pointer }
+  .title{ font-size:18px;font-weight:700 }
+  .user-blocks{ display:flex; gap:12px; align-items:center }
+  .user-card{ background:rgba(255,255,255,0.02); padding:8px 12px;border-radius:10px; min-width:160px; text-align:left }
+  .user-card .label{ color:var(--muted); font-size:12px }
+  .user-card .val{ font-weight:700; margin-top:6px; font-size:16px }
+
+  /* prizes area */
+  .container{ padding:12px; display:flex; flex-direction:column; gap:12px }
+  .grid-portrait{ display:grid; grid-template-columns:1fr 1fr; gap:12px }
+  .grid-landscape{ display:grid; grid-template-columns: repeat(8,1fr); gap:12px }
+  .prize{
+    background: linear-gradient(180deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01));
+    padding:10px;border-radius:12px; display:flex; flex-direction:column; gap:8px; box-shadow:0 6px 18px rgba(0,0,0,0.5)
+  }
+  .prize .price{ font-weight:700; font-size:14px; text-align:center }
+  .prize .thumb{ width:100%; height:100px; background:rgba(255,255,255,0.02); border-radius:8px; display:flex; align-items:center; justify-content:center; overflow:hidden }
+  .prize .thumb img{ max-width:100%; max-height:100%; object-fit:contain }
+  .prize .name{ font-weight:600; font-size:14px; min-height:36px }
+  .qty-row{ display:flex; align-items:center; gap:8px }
+  .qty-row input[type=number]{ width:64px; padding:6px;border-radius:8px;border:1px solid rgba(255,255,255,0.06); background:transparent;color:inherit; text-align:center }
+  .point-req{ font-size:13px; color:var(--muted) }
+  .redeem-btn{ margin-top:6px; padding:10px;border-radius:10px;border:0; font-weight:700; cursor:pointer; box-shadow:0 6px 0 rgba(0,0,0,0.35) }
+  .redeem-btn.enabled{ background:var(--accent); color:white }
+  .redeem-btn.disabled{ background:rgba(255,255,255,0.03); color:rgba(255,255,255,0.5); cursor:not-allowed; box-shadow:none }
+
+  /* modal */
+  .modal{ position:fixed; inset:0; display:none; align-items:center; justify-content:center; background:rgba(0,0,0,0.5) }
+  .modal .box{ background:#071026; padding:18px;border-radius:12px; min-width:280px; }
+  .row{ display:flex; gap:8px; justify-content:flex-end; margin-top:12px }
+
+  @media (orientation:portrait){
+    .grid-landscape{ display:none; }
+    .grid-portrait{ display:grid; grid-template-columns: 1fr 1fr }
+  }
+  @media (orientation:landscape){
+    .grid-portrait{ display:none; }
+    .grid-landscape{ display:grid; grid-template-columns: repeat(8,1fr) }
+    .prize .thumb{ height:80px }
+  }
+
+</style>
+</head>
+<body>
+  <div class="topbar">
+    <div class="left">
+      <div class="icon-back" id="backBtn" title="返回">
+        &#8592;
+      </div>
+      <div>
+        <div class="title">Reward Redemption</div>
+        <div class="tiny">Choose quantity and redeem</div>
+      </div>
+    </div>
+    <div class="user-blocks">
+      <div class="user-card">
+        <div class="label">User</div>
+        <div class="val" id="userName">—</div>
+      </div>
+      <div class="user-card">
+        <div class="label">Remaining Point</div>
+        <div class="val" id="userRemaining">0</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="container">
+    <!-- prizes grid: portrait and landscape both exist -->
+    <div class="grid-portrait" id="gridPortrait"></div>
+    <div class="grid-landscape" id="gridLandscape"></div>
+  </div>
+
+  <!-- hidden iframe to receive post response from GAS -->
+  <iframe name="hidden_iframe" id="hidden_iframe" style="display:none"></iframe>
+
+  <!-- confirm modal -->
+  <div class="modal" id="confirmModal">
+    <div class="box">
+      <div id="confirmText">Confirm redemption?</div>
+      <div class="row">
+        <button id="modalNo" class="btn">No</button>
+        <button id="modalYes" class="btn" style="background:var(--accent);color:white">Yes</button>
+      </div>
+    </div>
+  </div>
+
+<script>
+/* CONFIG */
+const GAS_WEB_APP_URL = 'https://script.google.com/macros/s/AKfycbzUxbdOpk5jZIhb9mRk-C5uWmYCOb2C9ide5iWD8330wGNi32D8hOB0o4TVlJUd5CKzpg/exec';
+
+/* utility */
+function $(id){return document.getElementById(id)}
+function numberWithCommas(x){ if(x===undefined || x===null) return '0'; return String(x).replace(/\B(?=(\d{3})+(?!\d))/g, ","); }
+
+/* parse URL params */
+const params = new URLSearchParams(location.search);
+const profileName = params.get('name') || 'Unknown';
+const returnUrl = params.get('returnUrl') || null;
+
+/* wire up top */
+$('userName').textContent = profileName;
+
+/* back button */
+$('backBtn').addEventListener('click', ()=> {
+  if(returnUrl) location.href = returnUrl;
+  else history.back();
+});
+
+/* JSONP loader function */
+function jsonpLoad(url){
+  return new Promise((resolve,reject)=>{
+    const cbName = 'cb_' + Math.random().toString(36).slice(2,9);
+    url.searchParams.set('callback', cbName);
+    // define callback
+    window[cbName] = function(data){
+      resolve(data);
+      // cleanup
+      try{ delete window[cbName]; }catch(e){}
+      script.remove();
+    };
+    const script = document.createElement('script');
+    script.src = url.toString();
+    script.onerror = ()=> { reject(new Error('JSONP fail')); try{ delete window[cbName]; }catch(e){} script.remove(); };
+    document.head.appendChild(script);
+  });
+}
+
+/* fetch profile remaining and total */
+async function loadProfile(){
+  const u = new URL(GAS_WEB_APP_URL);
+  u.searchParams.set('mode','profile');
+  u.searchParams.set('name', profileName);
+  const data = await jsonpLoad(u).catch(()=>({total:0,remaining:0}));
+  $('userRemaining').textContent = numberWithCommas(data.remaining || 0);
+  window.__remaining = Number(data.remaining || 0);
+}
+
+/* load rewards (Tab 12) */
+async function loadRewards(){
+  const u = new URL(GAS_WEB_APP_URL);
+  u.searchParams.set('mode','rewards');
+  const data = await jsonpLoad(u).catch(()=>({rewards:[]}));
+  window.__rewards = data.rewards || [];
+  renderRewards(window.__rewards);
+}
+
+/* render prizes */
+function renderRewards(list){
+  const portrait = $('gridPortrait');
+  const landscape = $('gridLandscape');
+  portrait.innerHTML=''; landscape.innerHTML='';
+  list.forEach((r, idx) => {
+    const node = makePrizeCard(r, idx);
+    // clone for two grids
+    portrait.appendChild(node.cloneNode(true));
+    landscape.appendChild(node);
+  });
+}
+
+/* create card DOM (with form inside) */
+function makePrizeCard(reward, idx){
+  // reward: {name: string, points: number}
+  const wrapper = document.createElement('div');
+  wrapper.className='prize';
+  wrapper.dataset.rewardName = reward.name;
+  wrapper.dataset.points = reward.points;
+
+  wrapper.innerHTML = `
+    <div class="price">Cost: <span class="cost">${numberWithCommas(reward.points)}</span></div>
+    <div class="thumb"><img src="data:image/png;base64,PLACEHOLDER_BASE64" alt="thumb"></div>
+    <div class="name">${escapeHtml(reward.name)}</div>
+
+    <div class="qty-row">
+      <label>Qty</label>
+      <input type="number" min="0" max="10" value="0" step="1" class="qty" />
+    </div>
+    <div class="point-req">Point Required: <span class="req">0</span></div>
+
+    <form method="post" target="hidden_iframe" class="redeemForm">
+      <input type="hidden" name="action" value="redeem" />
+      <input type="hidden" name="name" value="${escapeHtml(profileName)}" />
+      <input type="hidden" name="rewardName" value="${escapeHtml(reward.name)}" />
+      <input type="hidden" name="quantity" value="0" />
+      <input type="hidden" name="pointConsumed" value="0" />
+      <input type="hidden" name="ts_client" value="${Date.now()}" />
+      <button type="button" class="redeem-btn disabled">Redeem</button>
+    </form>
+  `;
+
+  // bind interactions
+  const qty = wrapper.querySelector('.qty');
+  const req = wrapper.querySelector('.req');
+  const btn = wrapper.querySelector('.redeem-btn');
+  const form = wrapper.querySelector('.redeemForm');
+  const hiddenQty = form.querySelector('input[name=quantity]');
+  const hiddenPoint = form.querySelector('input[name=pointConsumed]');
+
+  function update(){
+    const q = Math.max(0, Math.min(10, Number(qty.value || 0)));
+    const unit = Number(reward.points || 0);
+    const pointRequired = q * unit;
+    req.textContent = numberWithCommas(pointRequired);
+    hiddenQty.value = q;
+    hiddenPoint.value = pointRequired;
+    // enable logic
+    if(q > 0 && pointRequired <= (window.__remaining || 0)){
+      btn.classList.remove('disabled'); btn.classList.add('enabled');
+      btn.disabled = false;
+    } else {
+      btn.classList.remove('enabled'); btn.classList.add('disabled');
+      btn.disabled = true;
+    }
+  }
+  qty.addEventListener('input', update);
+
+  // confirm modal flow
+  btn.addEventListener('click', ()=>{
+    if(btn.classList.contains('disabled')) return;
+    const q = Number(qty.value||0);
+    if(q <= 0) return;
+    const pointRequired = Number(hiddenPoint.value||0);
+    // show modal
+    showConfirm(`Do you agree to redeem ${q} × ${reward.name} for ${numberWithCommas(pointRequired)} points?`, async (confirmed)=>{
+      if(!confirmed) return;
+      // lock all redeem buttons for 15s after submit (client-side)
+      lockAllRedeemButtons(15000);
+      // submit the form (form target hidden iframe)
+      // ensure pointConsumed is current
+      hiddenPoint.value = pointRequired;
+      hiddenQty.value = q;
+      // append returnUrl so GAS can include it in postMessage if needed
+      const rUrlInput = document.createElement('input');
+      rUrlInput.type = 'hidden'; rUrlInput.name = 'returnUrl';
+      rUrlInput.value = returnUrl || ''; form.appendChild(rUrlInput);
+      // now submit
+      form.submit();
+    });
+  });
+
+  // handle postMessage from hidden iframe (success/fail)
+  window.addEventListener('message', event => {
+    const d = event.data || {};
+    if(!d || !d._hl_redeem_response) return;
+    // expected { _hl_redeem_response: true, status: 'success'|'error', message: '', remaining: 12345 }
+    if(d.status === 'success'){
+      window.__remaining = Number(d.remaining || 0);
+      $('userRemaining').textContent = numberWithCommas(window.__remaining);
+      // update all cards enable states
+      document.querySelectorAll('.prize').forEach(card=>{
+        const qInput = card.querySelector('.qty');
+        const wUnit = Number(card.dataset.points||0);
+        const qv = Number(qInput.value||0);
+        const need = qv * wUnit;
+        const btn2 = card.querySelector('.redeem-btn');
+        if(qv>0 && need <= window.__remaining){ btn2.classList.add('enabled'); btn2.classList.remove('disabled'); btn2.disabled=false; }
+        else { btn2.classList.remove('enabled'); btn2.classList.add('disabled'); btn2.disabled=true; }
+      });
+      alert('Redeem success!');
+    } else {
+      alert('Redeem failed: ' + (d.message||'Unknown'));
+    }
+  }, false);
+
+  return wrapper;
+}
+
+/* small helpers */
+function escapeHtml(s){ if(!s) return ''; return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+function showConfirm(text, cb){
+  const modal = $('confirmModal');
+  $('confirmText').textContent = text;
+  modal.style.display = 'flex';
+  const yes = $('modalYes'), no = $('modalNo');
+  function cleanup(){ modal.style.display='none'; yes.removeEventListener('click',onYes); no.removeEventListener('click',onNo); }
+  function onYes(){ cleanup(); cb(true); }
+  function onNo(){ cleanup(); cb(false); }
+  yes.addEventListener('click', onYes);
+  no.addEventListener('click', onNo);
+}
+
+/* lock all redeem buttons */
+function lockAllRedeemButtons(ms){
+  document.querySelectorAll('.redeem-btn').forEach(b=>{
+    b.classList.remove('enabled'); b.classList.add('disabled'); b.disabled=true;
+  });
+  setTimeout(()=> {
+    // re-evaluate states: triggers by setting qty.value to current value to call input event
+    document.querySelectorAll('.prize .qty').forEach(q=> q.dispatchEvent(new Event('input')));
+  }, ms);
+}
+
+/* on load */
+(async function(){
+  await loadProfile();
+  await loadRewards();
+})();
+</script>
+</body>
+</html>
